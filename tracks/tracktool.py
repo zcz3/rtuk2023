@@ -5,6 +5,10 @@ import glob
 import xml.etree.ElementTree as ET
 
 
+COMBINED_TRACKS_FILE = 'James_RTUK23_Tracks.gpx'
+
+
+
 def parse_all_tracks(glob_list):
   files = []
   for g in glob_list:
@@ -25,7 +29,7 @@ def parse_all_tracks(glob_list):
   
   print('Total %d points' % len(points))
 
-  write_track(points, 'test.gpx')
+  write_track(points, COMBINED_TRACKS_FILE)
   
   return True
 
@@ -74,6 +78,7 @@ def parse_trkpt(pt):
   time = ''
   lat = ''
   lon = ''
+  ele = ''
 
   try:
     lat = pt.attrib['lat']
@@ -87,33 +92,54 @@ def parse_trkpt(pt):
 
   time = timetag.text
 
-  if len(time) == 0 or len(lat) == 0 or len(lon) == 0:
+  eletag = pt.find('./{*}ele')
+  if eletag is None or eletag.text is None:
+    return False
+
+  ele = eletag.text
+
+  if len(time) == 0 or len(lat) == 0 or len(lon) == 0 or len(ele) == 0:
     return False
   
   return {
     'time': time,
     'lat': lat,
     'lon': lon,
+    'ele': ele,
   }
 
 def write_track(points, gpx_name):
-  root = ET.Element('gpx')
-  trk = ET.SubElement(root, 'trk')
-  name = ET.SubElement(trk, 'name')
+  GPX_NS = 'http://www.topografix.com/GPX/1/1'
+  NSP = '{%s}' % GPX_NS
+  ET.register_namespace('', GPX_NS)
+
+  root = ET.Element(NSP + 'gpx')
+  root.attrib['version'] = '1.1'
+  root.attrib['creator'] = 'https://github.com/zcz3/rtuk2023'
+
+  trk = ET.SubElement(root, NSP + 'trk')
+  name = ET.SubElement(trk, NSP + 'name')
   name.text = 'My Fancy Track'
-  seg = ET.SubElement(trk, 'trkseg')
+  seg = ET.SubElement(trk, NSP + 'trkseg')
 
   for ptk in points:
     pt = points[ptk]
 
-    trkpt = ET.SubElement(seg, 'trkpt')
+    trkpt = ET.SubElement(seg, NSP + 'trkpt')
     trkpt.attrib['lat'] = pt['lat']
     trkpt.attrib['lon'] = pt['lon']
-    time = ET.SubElement(trkpt, 'time')
+    time = ET.SubElement(trkpt, NSP + 'time')
     time.text = pt['time']
+    ele = ET.SubElement(trkpt, NSP + 'ele')
+    ele.text = pt['ele']
   
-  with open(gpx_name, 'wt') as f:
-    f.write(ET.tostring(root).decode())
+  tree = ET.ElementTree(root)
+  ET.indent(tree)
+
+  tree.write(
+    gpx_name,
+    encoding='unicode',
+    xml_declaration=True)
 
 def main(argv):
   result = False
