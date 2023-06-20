@@ -154,8 +154,127 @@ def write_track(points, gpx_name):
     encoding='unicode',
     xml_declaration=True)
 
+
+
+
+class GPXFile:
+
+  def __init__(self):
+    self._reset()
+
+  def _reset(self):
+    self.ok = False
+    self.error = ''
+
+    self.creator = 'Unknown'
+    self.n_wpt = 0
+    self.n_rte = 0
+    self.n_trk = 0
+    self.n_trkpts = 0
+
+    self.trkpts = []
+    self.oldest_trkpt = ''
+    self.newest_trkpt = ''
+
+  def load(self, path):
+    self._reset()
+
+    try:
+      et = ET.parse(path)
+    except FileNotFoundError:
+      self.error = 'File not found'
+      return False
+    except ET.ParseError:
+      self.error = 'XML parse error'
+      return False
+    
+    self.ok = self._load_et(et)
+    return self.ok
+
+  def _load_et(self, et):
+    # gpx -> wpt/rte/trk
+    # gpx -> trk -> trkseg -> trkpt
+
+    root = et.getroot()
+    rootname = root.tag
+    if len(rootname) < 3 or rootname[-3:] != 'gpx':
+      self.error = 'Not a GPX file'
+      return False
+
+    if not 'version' in root.attrib.keys() or root.attrib['version'] != '1.1':
+      self.error = 'Invalid GPX version'
+      return False
+
+    if 'creator' in root.attrib.keys():
+      c = root.attrib['creator'].strip()
+      if len(c):
+        self.creator = c
+
+    self.n_wpt = len( et.findall('./{*}wpt'))
+    self.n_rte = len( et.findall('./{*}rte'))
+
+    trks = et.findall('./{*}trk')
+    
+    for trk in trks:
+      for pt in trk.findall('.//{*}trkpt'):
+        point = self._load_trkpt(pt)
+
+        if point is False:
+          self.error = 'Could not parse trkpt'
+          return False
+    
+    return True
+
+  def _load_trkpt(self, pt):
+    # We keep these as text to preserve accuracy
+    time = ''
+    lat = ''
+    lon = ''
+    ele = ''
+
+    try:
+      lat = pt.attrib['lat']
+      lon = pt.attrib['lon']
+    except KeyError:
+      return False
+    
+    timetag = pt.find('./{*}time')
+    if timetag is None or timetag.text is None:
+      return False
+
+    time = timetag.text
+
+    eletag = pt.find('./{*}ele')
+    if eletag is None or eletag.text is None:
+      return False
+
+    ele = eletag.text
+
+    if len(time) == 0 or len(lat) == 0 or len(lon) == 0 or len(ele) == 0:
+      return False
+    
+    self.trkpts.append({
+      'time': time,
+      'lat': lat,
+      'lon': lon,
+      'ele': ele,
+    })
+
+    self.n_trkpts += 1
+
+    if len(self.oldest_trkpt) == 0 or time < self.oldest_trkpt:
+      self.oldest_trkpt = time
+    
+    if len(self.newest_trkpt) == 0 or time > self.newest_trkpt:
+      self.newest_trkpt = time
+
+
+
 def usage(exec_name):
   print("""Usage:
+
+Print info about GPS files:
+  {0} i raw_garmin73/*.gpx
 
 Combine all tracks from multiple raw GPX files into single track in single GPX file:
   {0} cs combined.gpx raw_garmin73/*.gpx
@@ -171,6 +290,13 @@ Combine all tracks and export only those that occur since LEG_FILTER:
 """.format(exec_name, COMBINED_TRACKS_FILE), file=sys.stderr)
   sys.exit(-1)
 
+def expand_globs(glob_list):
+  files = []
+  for g in glob_list:
+    files += glob.glob(g)
+
+  return files
+
 def main(argv):
   ex = argv[0]
 
@@ -183,7 +309,30 @@ def main(argv):
 
   ok = False
 
-  if cmd == 'cs':
+  if cmd == 'i':
+    if nargs == 0:
+      usage(ex)
+    
+    ok = True
+    
+    for f in expand_globs(args):
+      print('%s:' % f)
+      gf = GPXFile()
+      gf.load(f)
+
+      if not gf.ok:
+        print('  Load error: ' + gf.error)
+      else:
+        print('  Creator: ' + gf.creator)
+        print('  Num wpt: %i' % gf.n_wpt)
+        print('  Num rte: %i' % gf.n_rte)
+        print('  Num trk: %i' % gf.n_trk)
+        print('    Num trkpts: %i' % gf.n_trkpts)
+        print('    Oldest trkpt: ' + gf.oldest_trkpt)
+        print('    Newest trkpt: ' + gf.newest_trkpt)
+        print('\n')
+
+  elif cmd == 'cs':
     if nargs < 2:
       usage(ex)
     
@@ -202,4 +351,3 @@ def main(argv):
 
 if __name__ == "__main__":
   sys.exit(main(sys.argv))
-
