@@ -3,125 +3,106 @@
 import sys
 import glob
 import xml.etree.ElementTree as ET
-import datetime as DT
+from datetime import datetime
+from operator import itemgetter
 
 COMBINED_TRACKS_FILE = 'James_RTUK23_Tracks.gpx'
 
 LEG_FILTER = (
-  ('Gosport to Dover',              ('2023-04-22 15:11:49', '2023-04-23 10:47:49')),
-  ('Dover to Ramsgate',             ('2023-04-25 14:59:49', '2023-04-25 18:44:54')),
-  ('Ramsgate to Harwich',           ('2023-04-26 05:50:21', '2023-04-26 16:58:53')),
-  ('Harwich to Woodbridge',         ('2023-04-27 13:14:04', '2023-04-27 17:05:39')),
-  ('Woodbridge to Lowestoft',       ('2023-04-30 07:34:46', '2023-04-30 16:41:02')),
-  ('Lowestoft to Scarborough',      ('2023-05-03 10:39:57', '2023-05-04 09:30:06')),
-  ('Scarborough to Tyne',           ('2023-05-08 05:50:57', '2023-05-08 23:35:11')),
-  ('Tyne to Blyth',                 ('2023-05-13 12:55:25', '2023-05-13 15:43:06')),
-  ('Blyth to Newton Haven ⚓',      ('2023-05-15 09:58:32', '2023-05-15 19:34:58')),
-  ('Newton Haven ⚓ to Eyemouth',   ('2023-05-16 09:19:34', '2023-05-16 19:09:29',
-                                     '2023-05-16 20:18:33', '2023-05-16 20:47:24')),
-  ('Eyemouth to Arbroath',          ('2023-05-18 04:08:11', '2023-05-18 12:12:59')),
-  ('Arbroath to Peterhead',         ('2023-05-20 12:38:18', '2023-05-21 03:26:31')),
-  ('Peterhead to Wick',             ('2023-05-25 06:44:48', '2023-05-26 05:30:07')),
+  ('Gosport to Dover',              ('2023-04-22T15:11:49Z', '2023-04-23T10:47:49Z')),
+  ('Dover to Ramsgate',             ('2023-04-25T14:59:49Z', '2023-04-25T18:44:54Z')),
+  ('Ramsgate to Harwich',           ('2023-04-26T05:50:21Z', '2023-04-26T16:58:53Z')),
+  ('Harwich to Woodbridge',         ('2023-04-27T13:14:04Z', '2023-04-27T17:05:39Z')),
+  ('Woodbridge to Lowestoft',       ('2023-04-30T07:34:46Z', '2023-04-30T16:41:02Z')),
+  ('Lowestoft to Scarborough',      ('2023-05-03T10:39:57Z', '2023-05-04T09:30:06Z')),
+  ('Scarborough to Tyne',           ('2023-05-08T05:50:57Z', '2023-05-08T23:35:11Z')),
+  ('Tyne to Blyth',                 ('2023-05-13T12:55:25Z', '2023-05-13T15:43:06Z')),
+  ('Blyth to Newton Haven ⚓',      ('2023-05-15T09:58:32Z', '2023-05-15T19:34:58Z')),
+  ('Newton Haven ⚓ to Eyemouth',   ('2023-05-16T09:19:34Z', '2023-05-16T19:09:29Z',
+                                     '2023-05-16T20:18:33Z', '2023-05-16T20:47:24Z')),
+  ('Eyemouth to Arbroath',          ('2023-05-18T04:08:11Z', '2023-05-18T12:12:59Z')),
+  ('Arbroath to Peterhead',         ('2023-05-20T12:38:18Z', '2023-05-21T03:26:31Z')),
+  ('Peterhead to Wick',             ('2023-05-25T06:44:48Z', '2023-05-26T05:30:07Z')),
 )
 
-def parse_all_tracks(glob_list):
-  files = []
-  for g in glob_list:
-    files += glob.glob(g)
+
+def combine_trkpts(gpx_list):
+  pts = {} # dict of trkpts indexed by time
+
+  for f in gpx_list:
+    gf = GPXFile()
+    gf.load(f)
+
+    if not gf.ok:
+      return (False, 'Load error (%s): %s' % (f, gf.error))
+    
+    for p in gf.trkpts:
+      if p['time'] not in pts.keys():
+        pts[p['time']] = p
+
+  return (True, sorted(list(pts.values()), key=itemgetter('time')))
+
+def filter_points(pts, filter):
+  # pts is list of points (each point being a dict with time, lat, lon, ele in text)
+  # assumes filter legs are in time order and not overlapping
+  # return val is suitable for write_trks()
+
+  n_legs = len(filter)
+  n_pts = len(pts)
+  c_pt = 0
+
+  if not n_legs or not n_pts:
+    return (False, 'Empty filter or points')
   
-  if not len(files):
-    print('No GPS files found')
-    return False
+  trks = {}
 
-  print('Parsing %d GPS files' % len(files))
-
-  points = {}
-
-  for f in files:
-    if parse_tracks(f, points) is False:
-      print('Aborting')
-      return False
+  for leg_name, leg_segs in filter:
+    rngs = []
+    for i in range(len(leg_segs)):
+      if i & 1:
+        rngs.append((
+          datetime.fromisoformat(leg_segs[i-1]), datetime.fromisoformat(leg_segs[i])
+        ))
+    
+    segs = []
+    
+    for start, end in rngs:
+      seg_pts = []
   
-  print('Total %d points' % len(points))
-  
-  return True
+      while c_pt < n_pts:
+        pt = pts[c_pt]
+        ptime = datetime.fromisoformat(pt['time'])
 
-def parse_tracks(gpx_file, points):
-  print(gpx_file)
+        if ptime > end:
+          break
 
-  try:
-    et = ET.parse(gpx_file)
-  except FileNotFoundError:
-    print('  File not found')
-    return False
-  except ET.ParseError:
-    print('  Parse error')
-    return False
+        c_pt += 1
 
-  # gpx -> trk -> trkseg -> trkpt
-  
-  rootname = et.getroot().tag
-  if len(rootname) < 3 or rootname[-3:] != 'gpx':
-    print('  Parse error')
-    return False
-  
-  trks = et.findall('./{*}trk')
-  print('  %d tracks' % len(trks))
+        if ptime < start:
+          continue
 
-  num_prev_points = len(points)
-  num_points = 0
-  
-  for trk in trks:
-    for pt in trk.findall('.//{*}trkpt'):
-      point = parse_trkpt(pt)
-
-      if point is False:
-        print('  Could not parse trkpt')
-        return False
+        seg_pts.append(pt)
       
-      points[point['time']] = point
-      num_points += 1
+      if len(seg_pts) == 0:
+        return (False, 'Empty segment in ' + leg_name)
+      
+      segs.append(seg_pts)
+
+    if len(segs) == 0:
+      return (False, 'Empty leg: ' + leg_name)
+    
+    trks[leg_name] = segs
   
-  print('  %d points (%d unique)' % (num_points, len(points) - num_prev_points))
-
-  return True
-
-def parse_trkpt(pt):
-  # We keep these as text to preserve accuracy
-  time = ''
-  lat = ''
-  lon = ''
-  ele = ''
-
-  try:
-    lat = pt.attrib['lat']
-    lon = pt.attrib['lon']
-  except KeyError:
-    return False
+  if len(trks) == 0:
+    return (False, 'No legs')
   
-  timetag = pt.find('./{*}time')
-  if timetag is None or timetag.text is None:
-    return False
+  return (True, trks)
 
-  time = timetag.text
+def write_trks(trks, gpx_name):
+  # trks is dict of track name to list of segments
+  # each segment is a list of points
+  # each point is a dict with time, lat, lon, ele in text
 
-  eletag = pt.find('./{*}ele')
-  if eletag is None or eletag.text is None:
-    return False
-
-  ele = eletag.text
-
-  if len(time) == 0 or len(lat) == 0 or len(lon) == 0 or len(ele) == 0:
-    return False
-  
-  return {
-    'time': time,
-    'lat': lat,
-    'lon': lon,
-    'ele': ele,
-  }
-
-def write_track(points, gpx_name):
   GPX_NS = 'http://www.topografix.com/GPX/1/1'
   NSP = '{%s}' % GPX_NS
   ET.register_namespace('', GPX_NS)
@@ -130,21 +111,29 @@ def write_track(points, gpx_name):
   root.attrib['version'] = '1.1'
   root.attrib['creator'] = 'https://github.com/zcz3/rtuk2023'
 
-  trk = ET.SubElement(root, NSP + 'trk')
-  name = ET.SubElement(trk, NSP + 'name')
-  name.text = 'My Fancy Track'
-  seg = ET.SubElement(trk, NSP + 'trkseg')
+  for tname in trks:
+    tsegs = trks[tname]
+    if len(tsegs) == 0:
+      return False
 
-  for ptk in points:
-    pt = points[ptk]
+    trk = ET.SubElement(root, NSP + 'trk')
+    name = ET.SubElement(trk, NSP + 'name')
+    name.text = tname
 
-    trkpt = ET.SubElement(seg, NSP + 'trkpt')
-    trkpt.attrib['lat'] = pt['lat']
-    trkpt.attrib['lon'] = pt['lon']
-    time = ET.SubElement(trkpt, NSP + 'time')
-    time.text = pt['time']
-    ele = ET.SubElement(trkpt, NSP + 'ele')
-    ele.text = pt['ele']
+    for tseg in tsegs:
+      if len(tseg) == 0:
+        return False
+
+      seg = ET.SubElement(trk, NSP + 'trkseg')
+
+      for tpt in tseg:
+        trkpt = ET.SubElement(seg, NSP + 'trkpt')
+        trkpt.attrib['lat'] = tpt['lat']
+        trkpt.attrib['lon'] = tpt['lon']
+        time = ET.SubElement(trkpt, NSP + 'time')
+        time.text = tpt['time']
+        ele = ET.SubElement(trkpt, NSP + 'ele')
+        ele.text = tpt['ele']
   
   tree = ET.ElementTree(root)
   ET.indent(tree)
@@ -153,6 +142,8 @@ def write_track(points, gpx_name):
     gpx_name,
     encoding='unicode',
     xml_declaration=True)
+  
+  return True
 
 
 
@@ -172,7 +163,7 @@ class GPXFile:
     self.n_trk = 0
     self.n_trkpts = 0
 
-    self.trkpts = []
+    self.trkpts = [] # list of dicts
     self.oldest_trkpt = ''
     self.newest_trkpt = ''
 
@@ -214,6 +205,7 @@ class GPXFile:
     self.n_rte = len( et.findall('./{*}rte'))
 
     trks = et.findall('./{*}trk')
+    self.n_trk = len(trks)
     
     for trk in trks:
       for pt in trk.findall('.//{*}trkpt'):
@@ -279,13 +271,10 @@ Print info about GPS files:
 Combine all tracks from multiple raw GPX files into single track in single GPX file:
   {0} cs combined.gpx raw_garmin73/*.gpx
 
-Combine all tracks and then split again according to LEG_FILTER into single GPX file:
-  {0} cf combined.gpx raw_garmin73/*.gpx
+Combine all tracks and then split again according to LEG_FILTER into single GPX file called \"{1}\":
+  {0} cf raw_garmin73/*.gpx
 
-Same as above but use \"{1}\" as output filename:
-  {0} cfd raw_garmin73/*.gpx
-
-Combine all tracks and export only those that occur since LEG_FILTER:
+Combine all tracks and export only those that occur since LEG_FILTER into a single GPX files called \"Recent_Tracks.gpx\":
   {0} cn newtracks.gpx raw_garmin73/*.gpx
 """.format(exec_name, COMBINED_TRACKS_FILE), file=sys.stderr)
   sys.exit(-1)
@@ -336,10 +325,53 @@ def main(argv):
     if nargs < 2:
       usage(ex)
     
-    track = parse_all_tracks(args[1:])
-    if track is not False:
-      ok = write_tracks({"Combined": track}, args[0])
-  
+    outpath = args[0]
+    inpaths = expand_globs(args[1:])
+
+    print('Num input files: %d' % len(inpaths))
+    
+    ok, res = combine_trkpts(inpaths)
+    if not ok:
+      print(res)
+    else:
+      pts = res
+      print('Num unique trkpts: %d' % len(pts))
+    
+    outpts = {
+      'Combined': [ pts, ]
+    }
+
+    if not write_trks(outpts, outpath):
+      print('Could not write output')
+
+  elif cmd == 'cf':
+    if nargs < 1:
+      usage(ex)
+    
+    outpath = COMBINED_TRACKS_FILE
+    inpaths = expand_globs(args)
+    filter = LEG_FILTER
+
+    print('Num input files: %d' % len(inpaths))
+    
+    ok, res = combine_trkpts(inpaths)
+    if not ok:
+      print(res)
+    else:
+      pts = res
+      print('Num unique trkpts: %d' % len(pts))
+    
+      ok, res = filter_points(pts, filter)
+      if not ok:
+        print(res)
+      else:
+        trks = res
+        if not write_trks(trks, outpath):
+          ok = False
+          print('Could not write output')
+        else:
+          print('Written to ' + outpath)
+
   else:
     usage(ex)
   
