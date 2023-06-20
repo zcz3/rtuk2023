@@ -3,11 +3,26 @@
 import sys
 import glob
 import xml.etree.ElementTree as ET
-
+import datetime as DT
 
 COMBINED_TRACKS_FILE = 'James_RTUK23_Tracks.gpx'
 
-
+LEG_FILTER = (
+  ('Gosport to Dover',              ('2023-04-22 15:11:49', '2023-04-23 10:47:49')),
+  ('Dover to Ramsgate',             ('2023-04-25 14:59:49', '2023-04-25 18:44:54')),
+  ('Ramsgate to Harwich',           ('2023-04-26 05:50:21', '2023-04-26 16:58:53')),
+  ('Harwich to Woodbridge',         ('2023-04-27 13:14:04', '2023-04-27 17:05:39')),
+  ('Woodbridge to Lowestoft',       ('2023-04-30 07:34:46', '2023-04-30 16:41:02')),
+  ('Lowestoft to Scarborough',      ('2023-05-03 10:39:57', '2023-05-04 09:30:06')),
+  ('Scarborough to Tyne',           ('2023-05-08 05:50:57', '2023-05-08 23:35:11')),
+  ('Tyne to Blyth',                 ('2023-05-13 12:55:25', '2023-05-13 15:43:06')),
+  ('Blyth to Newton Haven ⚓',      ('2023-05-15 09:58:32', '2023-05-15 19:34:58')),
+  ('Newton Haven ⚓ to Eyemouth',   ('2023-05-16 09:19:34', '2023-05-16 19:09:29',
+                                     '2023-05-16 20:18:33', '2023-05-16 20:47:24')),
+  ('Eyemouth to Arbroath',          ('2023-05-18 04:08:11', '2023-05-18 12:12:59')),
+  ('Arbroath to Peterhead',         ('2023-05-20 12:38:18', '2023-05-21 03:26:31')),
+  ('Peterhead to Wick',             ('2023-05-25 06:44:48', '2023-05-26 05:30:07')),
+)
 
 def parse_all_tracks(glob_list):
   files = []
@@ -28,8 +43,6 @@ def parse_all_tracks(glob_list):
       return False
   
   print('Total %d points' % len(points))
-
-  write_track(points, COMBINED_TRACKS_FILE)
   
   return True
 
@@ -141,17 +154,51 @@ def write_track(points, gpx_name):
     encoding='unicode',
     xml_declaration=True)
 
-def main(argv):
-  result = False
+def usage(exec_name):
+  print("""Usage:
 
-  if len(argv) > 1:
-    result = parse_all_tracks(argv[1:])
-  else:
-    print('Specify list of GPX files')
+Combine all tracks from multiple raw GPX files into single track in single GPX file:
+  {0} cs combined.gpx raw_garmin73/*.gpx
+
+Combine all tracks and then split again according to LEG_FILTER into single GPX file:
+  {0} cf combined.gpx raw_garmin73/*.gpx
+
+Same as above but use \"{1}\" as output filename:
+  {0} cfd raw_garmin73/*.gpx
+
+Combine all tracks and export only those that occur since LEG_FILTER:
+  {0} cn newtracks.gpx raw_garmin73/*.gpx
+""".format(exec_name, COMBINED_TRACKS_FILE), file=sys.stderr)
+  sys.exit(-1)
+
+def main(argv):
+  ex = argv[0]
+
+  if len(argv) == 1:
+    usage(ex)
   
-  if result:
-    return 0
-  return -1
+  cmd = argv[1]
+  args = argv[2:]
+  nargs = len(args)
+
+  ok = False
+
+  if cmd == 'cs':
+    if nargs < 2:
+      usage(ex)
+    
+    track = parse_all_tracks(args[1:])
+    if track is not False:
+      ok = write_tracks({"Combined": track}, args[0])
+  
+  else:
+    usage(ex)
+  
+  if not ok:
+    print("Abortin'", file=sys.stderr)
+    return -1
+
+  return 0
 
 if __name__ == "__main__":
   sys.exit(main(sys.argv))
