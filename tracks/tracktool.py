@@ -29,7 +29,10 @@ def read_tracklog(csv_path):
 
   with open(csv_path, 'r') as f:
     reader = csv.reader(f, delimiter=',')
+    line = 0
     for row in reader:
+      line += 1
+
       date, mode, dest = row
       date = date.strip()
       mode = mode.strip()
@@ -39,7 +42,7 @@ def read_tracklog(csv_path):
         continue
 
       if mode not in MODES:
-        oh('Invalid mode')
+        oh('Invalid mode line %d' % line)
       
       datep = None
       
@@ -89,6 +92,9 @@ def read_tracklog(csv_path):
 GPX_NS = 'http://www.topografix.com/GPX/1/1'
 NSP = '{%s}' % GPX_NS
 ET.register_namespace('', GPX_NS)
+GPXX_NS = 'http://www.garmin.com/xmlschemas/GpxExtensions/v3'
+XNSP = '{%s}' % GPXX_NS
+ET.register_namespace('gpxx', GPXX_NS)
 
 class GPXWriter:
 
@@ -102,13 +108,15 @@ class GPXWriter:
     self.trkseg_n = 0
     self.trkpt_n = 0
   
-  def start_trk(self, name):
+  def start_trk(self, name, colour=''):
     if self.cur_trk is not None:
       oh("trk not stopped")
 
     self.cur_trk = trk = ET.SubElement(self.root, NSP + 'trk')
     trk_name = ET.SubElement(self.cur_trk, NSP + 'name')
     trk_name.text = name
+
+    self._gpxx_set_colour(self.cur_trk, colour)
   
   def stop_trk(self):
     if self.cur_trk is None:
@@ -123,7 +131,7 @@ class GPXWriter:
     self.cur_trk = None
     self.trkseg_n = 0
   
-  def start_trkseg(self):
+  def start_trkseg(self, colour=''):
     if self.cur_trk is None:
       oh("trk not started")
 
@@ -131,6 +139,7 @@ class GPXWriter:
       oh("trkseg not stopped")
     
     self.cur_trkseg = ET.SubElement(self.cur_trk, NSP + 'trkseg')
+    self._gpxx_set_colour(self.cur_trkseg, colour)
   
   def stop_trkseg(self):
     if self.cur_trk is None:
@@ -170,6 +179,13 @@ class GPXWriter:
       path,
       encoding='unicode',
       xml_declaration=True)
+  
+  def _gpxx_set_colour(self, elem, colour):
+    if len(colour):
+      ext = ET.SubElement(elem, NSP + 'extensions')
+      x_ext = ET.SubElement(ext, XNSP + 'TrackExtension')
+      x_col = ET.SubElement(x_ext, XNSP + 'DisplayColor')
+      x_col.text = colour
 
 
 
@@ -313,6 +329,49 @@ def combine_trkpts(files):
   return (True, sorted(list(pts.values()), key=itemgetter('time')))
 
 
+
+def process_split_gpx(gpx_writer, legs, points):
+  gw = gpx_writer
+
+  leg_n = 1
+
+  for leg in legs:
+    if len(leg['tracks']) < 2:
+      oh("no tracks")
+    
+    gw.start_trk('%d: %s to %s' % (leg_n, leg['start'], leg['stop']), 'DarkRed')
+    leg_n += 1
+
+    gw.start_trkseg()
+    
+    start_point = leg['tracks'][0]
+    end_point = leg['tracks'][-1]
+
+    if start_point['mode'] not in MODES_MOVING:
+      oh("Start mode not moving")
+    
+    if end_point['mode'] not in MODES_STATIC:
+      oh("End mode not static")
+
+    while True:
+      try:
+        p = points.pop(0)
+      except IndexError:
+        oh("Run out of points, %s %s" % (start_point['date'], end_point['date']))
+      
+      if p['ptime'] < start_point['date']:
+        continue
+      
+      if p['ptime'] > end_point['date']:
+        break
+      
+      gw.add_trkpt(p['time'], p['lat'], p['lon'], p['ele'])
+
+    gw.stop_trkseg()
+    gw.stop_trk()
+
+
+
 def usage(exec_name):
   print("""Usage:
 
@@ -391,33 +450,51 @@ def main(argv):
 
     of.write_to_file(outpath)
 
-  elif cmd == 'cf':
-    if nargs < 1:
+  elif cmd == 'cf' or cmd == 'cfs' or cmd == 'cf2':
+    if nargs < 3:
       usage(ex)
     
-    outpath = COMBINED_TRACKS_FILE
-    inpaths = expand_globs(args)
-    filter = LEG_FILTER
+    outpath = args[0]
+    tracklog = args[1]
+    inpaths = expand_globs(args[2:])
 
     print('Num input files: %d' % len(inpaths))
     
     ok, res = combine_trkpts(inpaths)
     if not ok:
-      print(res)
-    else:
-      pts = res
-      print('Num unique trkpts: %d' % len(pts))
-    
-      ok, res = filter_points(pts, filter)
-      if not ok:
-        print(res)
-      else:
-        trks = res
-        if not write_trks(trks, outpath):
-          ok = False
-          print('Could not write output')
-        else:
-          print('Written to ' + outpath)
+      oh(res)
+
+    pts = res
+    print('Num unique trkpts: %d' % len(pts))
+
+    legs = read_tracklog(tracklog)
+    print('Num legs: %d' % len(legs))
+
+    if cmd == 'cf':
+      of = GPXWriter()
+      process_split_gpx(of, legs, pts)
+      of.write_to_file(outpath)
+
+    elif cmd == 'cfs':
+      n = 0
+      for leg in legs:
+        n += 1
+        of = GPXWriter()
+        process_split_gpx(of, (leg,), pts)
+        of.write_to_file('%s-%d.gpx' % (outpath, n))
+
+    elif cmd == 'cf2':
+      n = len(legs) >> 1
+
+      of = GPXWriter()
+      process_split_gpx(of, legs[:n], pts)
+      of.write_to_file('%s-1.gpx' % outpath)
+
+      of = GPXWriter()
+      process_split_gpx(of, legs[n:], pts)
+      of.write_to_file('%s-2.gpx' % outpath)
+  
+
 
   else:
     usage(ex)
