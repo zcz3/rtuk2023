@@ -7,6 +7,29 @@ import datetime
 from tracktool import oh, read_tracklog, expand_globs, combine_trkpts, MODES_STATIC, MODES_MOVING
 
 
+
+def calc_nm(pt1, pt2):
+  from geopy import distance
+
+  d1 = (float(pt1['lat']), float(pt1['lon']))
+  d2 = (float(pt2['lat']), float(pt2['lon']))
+
+  return distance.distance(d1, d2).nautical
+
+
+# Goes through all trkpts and calculates cumulative distance between each
+def calc_points_nm(points):
+  last = None
+  nm = 0.0
+
+  for pt in points:
+    if last is not None:
+      nm += calc_nm(last, pt)
+    
+    pt['nm'] = nm
+    last = pt
+
+
 # Returns (first trkpt before, closest trkpt, first trkpt after)
 # trkpt must be within 5mins
 def match_trkpt(time, points, thresh_mins=20):
@@ -40,6 +63,9 @@ def match_trkpt(time, points, thresh_mins=20):
 
 
 
+def format_td(td):
+  return str(td)
+
 
 
 def main(argv):
@@ -56,6 +82,10 @@ def main(argv):
 
   pts = res
   print('Num unique trkpts: %d' % len(pts))
+
+  print("Calculating distances")
+  calc_points_nm(pts)
+  print("Done (%d)" % pts[-1]['nm'])
 
   for leg in legs:
     last_mode = None
@@ -94,9 +124,122 @@ def main(argv):
       last_mode = mode
 
 
+  # Process stats
+
+  mtotal = {
+    'All': datetime.timedelta(0),
+    'Engine': datetime.timedelta(0),
+    'Sail': datetime.timedelta(0),
+    'MotorSail': datetime.timedelta(0),
+  }
+
+  Dtotal = {
+    'All': 0.0,
+    'Engine': 0.0,
+    'Sail': 0.0,
+    'MotorSail': 0.0,
+  }
+
+  for leg in legs:
+
+    leg['mtotal'] = {
+      'All': datetime.timedelta(0),
+      'Engine': datetime.timedelta(0),
+      'Sail': datetime.timedelta(0),
+      'MotorSail': datetime.timedelta(0),
+    }
+
+    leg['Dtotal'] = {
+      'All': 0.0,
+      'Engine': 0.0,
+      'Sail': 0.0,
+      'MotorSail': 0.0,
+    }
+
+    last = None
+
+    for t in leg['tracks']:
+
+      if last and last['mode'] in MODES_MOVING:
+        elap = t['date'] - last['date']
+        m = last['mode']
+        mtotal['All'] += elap
+        mtotal[m] += elap
+        leg['mtotal']['All'] += elap
+        leg['mtotal'][m] += elap
+
+        nm = t['trkpt']['nm'] - last['trkpt']['nm']
+        Dtotal['All'] += nm
+        Dtotal[m] += nm
+        leg['Dtotal']['All'] += nm
+        leg['Dtotal'][m] += nm
+
+      
+      last = t
 
 
-  pprint.pprint(legs)
+  mtotal['Check'] = mtotal['Engine'] + mtotal['Sail'] + mtotal['MotorSail']
+
+
+  # Write stats
+
+  with open(out_path, 'w') as f:
+    out = csv.writer(f, delimiter=',', quoting=csv.QUOTE_NONNUMERIC)
+
+    out.writerow((
+      'Leg',
+      'Stopover type',
+      'Total Time',
+      'Total Distance (nm)',
+      'Sailing Time',
+      'Sailing Distance (nm)',
+      'Engine Time',
+      'Engine Distance (nm)',
+      'Motorsail Time',
+      'Motorsail Distance (nm)',
+      'Average Speed (knots)',
+    ))
+
+    all_td = mtotal['All']
+    all_tnm = Dtotal['All']
+    row = ['TOTAL TRIP', '', ]
+    row.append(format_td(all_td))
+    row.append(int(all_tnm))
+
+    for n in ('Sail', 'Engine', 'MotorSail'):
+      td = mtotal[n]
+      dperc = (td.total_seconds() / all_td.total_seconds()) * 100
+      row.append("{0} ({1}%)".format(format_td(td), round(dperc)))
+
+      tnm = Dtotal[n]
+      nmperc = (tnm / all_tnm) * 100
+      row.append("{0} ({1}%)".format(int(tnm), round(nmperc)))
+    
+    row.append(all_tnm / (all_td.total_seconds() / 3600.0))
+
+    out.writerow(row)
+
+    for l in legs:
+      all_td = l['mtotal']['All']
+      all_tnm = l['Dtotal']['All']
+      row = ['{0} to {1}'.format(l['start'], l['stop']), l['tracks'][-1]['mode']]
+      row.append(format_td(all_td))
+      row.append(int(all_tnm))
+
+      for n in ('Sail', 'Engine', 'MotorSail'):
+        td = l['mtotal'][n]
+        dperc = (td.total_seconds() / all_td.total_seconds()) * 100
+        row.append("{0} ({1}%)".format(format_td(td), round(dperc)))
+
+        tnm = l['Dtotal'][n]
+        nmperc = (tnm / all_tnm) * 100
+        row.append("{0} ({1}%)".format(int(tnm), round(nmperc)))
+      
+      row.append(all_tnm / (all_td.total_seconds() / 3600.0))
+
+      out.writerow(row)
+
+  #pprint.pprint(legs)
 
   return 0
 
